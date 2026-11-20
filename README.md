@@ -1,4 +1,4 @@
-# UniRoot-Next
+# UniRoot Next
 
 **One-tap root for Samsung Galaxy devices — New exploit (DirtyFrag CVE-2026-43284, unprivileged) + Old exploit profiles, with auto-root at every boot.**
 
