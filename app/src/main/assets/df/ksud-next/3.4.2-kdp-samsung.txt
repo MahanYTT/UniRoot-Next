@@ -1,1 +1,1 @@
-ksud officiel KernelSU-Next 3.4.2 (uapi 4) + 8 .ko Samsung KDP/DEFEX embarqués — S25 / S26 Ultra / Z Fold 8
+Official KernelSU-Next v3.4.2 (33355, uapi 5) + 8 Samsung KDP/DEFEX modules (EVENT_SERVICES=4 + Zygisk/LSPosed soft-reboot) — S25 / S26 Ultra / Z Fold 8

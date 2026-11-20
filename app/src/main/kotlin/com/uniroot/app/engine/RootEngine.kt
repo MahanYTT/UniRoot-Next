@@ -393,7 +393,7 @@ class RootEngine(private val context: Context) {
 
     private fun runLogHeader(stamp: String, status: String, profileName: String, durationMs: Long): String = buildString {
         val info = detectDevice()
-        appendLine("UniRoot run log")
+        appendLine("UniRoot Next run log")
         appendLine("Date:     ${stamp.replace('_', ' ')}")
         appendLine("Result:   $status")
         appendLine("Duration: ${durationMs / 1000}s")

@@ -44,7 +44,7 @@ class DfBootService : Service() {
             }
             val notif = Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setContentTitle("UniRoot")
+                .setContentTitle("UniRoot Next")
                 .setContentText("Auto-start at boot…")
                 .setOngoing(true)
                 .build()

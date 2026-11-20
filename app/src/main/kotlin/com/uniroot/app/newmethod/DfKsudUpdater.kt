@@ -282,6 +282,23 @@ object DfKsudUpdater {
             ?.groupValues?.get(1)
         val niceName = if (code != null) "$version-$code" else "$version-samsung"
 
+        if (classic) {
+            val tagFile = File(context.filesDir, "ksud-classic-latest.tag")
+            val binFile = File(context.filesDir, "ksud-classic-latest")
+            if (binFile.isFile && tagFile.isFile && tagFile.readText().trim() == tag) {
+                KsudClassicProfiles.selectLatest(context, niceName,
+                    "official ksud $tag + Samsung KDP+DEFEX kos - patched on device")
+                say("[✓] You are already updated ($niceName)")
+                progress(100, "You are already updated ($niceName)")
+                return "You are already updated ($niceName)"
+            }
+        } else if (alreadyUpdatedNext(context, niceName)) {
+            KsudNextProfiles.setSelected(context, niceName)
+            say("[✓] You are already updated ($niceName)")
+            progress(100, "You are already updated ($niceName)")
+            return "You are already updated ($niceName)"
+        }
+
         val ksud = downloadKsud(tag, repo, progress)
         val patched = patchKsud(context, ksud, tag, classic, progress)
 
@@ -411,7 +428,44 @@ object DfKsudUpdater {
             if (got == null || !got.payload.contentEquals(a.payload)) { ok = false; say("[!] untouched asset modified @0x${Integer.toHexString(a.start)}") }
         }
         check(ok) { "verification failed - binary not reliable" }
+        if (!classic) {
+            patchNextLateLoadSoftReboot(data)
+        }
         say("[OK] ${plan.size} injected, ${streams.size - plan.size} preserved")
         return data
+    }
+
+    /**
+     * Patches the late-load -> emulated_soft_reboot transition in official
+     * KernelSU-Next 3.4.0 / 3.4.2 ksud binaries so that DirtyFrag late-load
+     * switches to PID 1's mount namespace and runs full soft-reboot
+     * (stop -> on_post_fs_data -> start -> on_services -> on_boot_completed)
+     * for Zygisk (Vector), LSPosed and global module mounts.
+     */
+    private fun patchNextLateLoadSoftReboot(data: ByteArray) {
+        fun readLe32(off: Int): Int =
+            (data[off].toInt() and 0xff) or
+                ((data[off + 1].toInt() and 0xff) shl 8) or
+                ((data[off + 2].toInt() and 0xff) shl 16) or
+                ((data[off + 3].toInt() and 0xff) shl 24)
+
+        fun writeLe32(off: Int, v: Int) {
+            data[off] = (v and 0xff).toByte()
+            data[off + 1] = ((v ushr 8) and 0xff).toByte()
+            data[off + 2] = ((v ushr 16) and 0xff).toByte()
+            data[off + 3] = ((v ushr 24) and 0xff).toByte()
+        }
+
+        // ksud Next 3.4.2 @ file 0x521238 (vaddr 0x522238): bl #0x5180c8 -> b #0x51fce8
+        if (data.size > 0x52123c && readLe32(0x521238) == 0x97ffd7a4.toInt()) {
+            writeLe32(0x521238, 0x17fff6ac)
+            say("[+] Patched Next 3.4.2 late-load -> emulated_soft_reboot @0x521238")
+            return
+        }
+        // ksud Next 3.4.0 @ file 0x3af7c8 (vaddr 0x3b07c8): bl #0x3a6928 -> b #0x3ae3b4
+        if (data.size > 0x3af7cc && readLe32(0x3af7c8) == 0x97ffd858.toInt()) {
+            writeLe32(0x3af7c8, 0x17fff6fb)
+            say("[+] Patched Next 3.4.0 late-load -> emulated_soft_reboot @0x3af7c8")
+        }
     }
 }

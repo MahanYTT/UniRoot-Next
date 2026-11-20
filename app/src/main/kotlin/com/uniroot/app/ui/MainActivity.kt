@@ -614,11 +614,7 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
                     engine.markRooted("DF")
                     Toast.makeText(this@MainActivity, R.string.phone_rooted_toast, Toast.LENGTH_LONG).show()
                     if (newMethodSoftReboot) {
-                        engine.appendLog("[NewMethod] auto soft reboot…")
-                        delay(2_500)
-                        runCatching {
-                            Runtime.getRuntime().exec(arrayOf("su", "-c", "setprop ctl.restart zygote"))
-                        }
+                        engine.appendLog("[NewMethod] auto soft reboot scheduled by ksud (Zygisk/LSPosed/Vector + global mounts)…")
                     } else {
                         delay(4_000)
                         restartKsuManager()
@@ -891,12 +887,12 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
                 // + re-enabling switches the flavor that comes back at boot.
                 val isNew = newMethod
                 if (isNew) {
-                    val rootFile = File(this@MainActivity.filesDir.parentFile, "ksud")
                     withContext(Dispatchers.IO) {
                         runCatching {
-                            df.root.DFBridge.stageKsud(this@MainActivity, ksuNextMode, object : df.root.IReporter {
+                            df.root.DFBridge.stageKsud(this@MainActivity, ksuNextMode, newMethodSoftReboot, object : df.root.IReporter {
                                 override fun report(msg: String?) {}
-                            })
+                            }, null)
+                            val rootFile = df.root.DFBridge.stagedBinaryFile(this@MainActivity, ksuNextMode)
                             if (rootFile.isFile) {
                                 instant.stageProfileKsud(rootFile.absolutePath, if (ksuNextMode) "kernelsu_next" else "kernelsu")
                             }
@@ -943,13 +939,13 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
             // (KernelSU or Next), custom profiles included.
             val isNew = newMethod
             if (isNew) {
-                val rootFile = File(this@MainActivity.filesDir.parentFile, "ksud")
                 val staged = withContext(Dispatchers.IO) {
                     runCatching {
-                        df.root.DFBridge.stageKsud(this@MainActivity, ksuNextMode, object : df.root.IReporter {
+                        df.root.DFBridge.stageKsud(this@MainActivity, ksuNextMode, newMethodSoftReboot, object : df.root.IReporter {
                             override fun report(msg: String?) {}
-                        })
+                        }, null)
                     }
+                    val rootFile = df.root.DFBridge.stagedBinaryFile(this@MainActivity, ksuNextMode)
                     if (rootFile.isFile) instant.stageProfileKsud(rootFile.absolutePath, if (ksuNextMode) "kernelsu_next" else "kernelsu")
                     else false
                 }
@@ -993,7 +989,7 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
                 val open = packageManager.getLaunchIntentForPackage(packageName)
                 val n = Notification.Builder(this@MainActivity, "auto_root")
                     .setSmallIcon(android.R.drawable.stat_sys_download)
-                    .setContentTitle("UniRoot — Instant Root")
+                    .setContentTitle("UniRoot Next — Instant Root")
                     .setContentText(getString(R.string.instant_root_soft_reboot_notif))
                     .setAutoCancel(true)
                     .setOngoing(true)

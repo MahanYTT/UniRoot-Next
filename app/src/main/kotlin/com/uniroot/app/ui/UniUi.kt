@@ -230,7 +230,7 @@ internal fun UniApp(
             modifier = Modifier.fillMaxSize(),
             topBar = {
                 TopAppBar(
-                    title = "UniRoot",
+                    title = stringResource(R.string.app_name),
                     scrollBehavior = scrollBehavior,
                     actions = {
                         SettingsMenu(
@@ -603,10 +603,10 @@ private fun UniAboutDialog(
                 Text(text = stringResource(R.string.view_source) + " ")
                 Text(
                     text = AnnotatedString(
-                        text = "GhostLock",
+                        text = "MahanYTT/UniRoot-Next",
                         spanStyle = SpanStyle(textDecoration = TextDecoration.Underline, color = MiuixTheme.colorScheme.primary),
                     ),
-                    modifier = Modifier.clickable { uriHandler.openUri("https://github.com/YuKongA/ghostlock-app") },
+                    modifier = Modifier.clickable { uriHandler.openUri("https://github.com/MahanYTT/UniRoot-Next") },
                 )
             }
             Text(

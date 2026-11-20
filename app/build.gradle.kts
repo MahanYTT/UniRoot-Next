@@ -5,8 +5,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val appName = "Uni-Root"
-val appVersionName = "5.1.7"
+val appName = "UniRoot Next"
+val appVersionName = "5.2.1"
 
 android {
     namespace = "com.uniroot.app"
@@ -19,7 +19,7 @@ android {
         applicationId = "com.example.universalsystemporter"
         minSdk = 31
         targetSdk = 37
-        versionCode = 300
+        versionCode = 302
         versionName = appVersionName
     }
     signingConfigs {

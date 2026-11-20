@@ -35,20 +35,42 @@ object KsudNextProfiles {
     private const val PREFS = "uniroot_prefs"
     private const val PREF_KEY = "ksud_next_profile"
     private const val MODE = Context.MODE_PRIVATE
+    /** Bumped whenever bundled Samsung KDP/DEFEX .kos or ksud late-load patches change. */
+    const val KO_PATCH_REV = "v5.2.0-event4-softreboot"
 
     /** Dossier des profils dynamiques (téléchargés par DfKsudUpdater). */
     fun dynamicDir(context: Context): File =
         File(context.filesDir, "ksud-next").apply { mkdirs() }
 
+    /** Purges stale dynamic profiles built with older Samsung .ko revisions on app upgrade. */
+    private fun ensureFreshDynamicProfiles(context: Context) {
+        runCatching {
+            val dir = dynamicDir(context)
+            val marker = File(dir, ".ko_patch_rev")
+            val current = if (marker.isFile) marker.readText().trim() else ""
+            if (current != KO_PATCH_REV) {
+                dir.listFiles()?.forEach { f ->
+                    if (f.name != ".ko_patch_rev") runCatching { f.delete() }
+                }
+                marker.writeText(KO_PATCH_REV)
+                val sel = selectedId(context)
+                if (sel.isNotEmpty() && !sel.endsWith("-kdp-samsung") && !sel.endsWith("-proven")) {
+                    setSelected(context, "")
+                }
+            }
+        }
+    }
+
     /** Profils embarqués + dynamiques, triés version décroissante puis slug. */
     fun list(context: Context): List<KsudNextProfile> {
+        ensureFreshDynamicProfiles(context)
         val names: List<String> = runCatching {
             context.assets.list(DIR)?.toList() ?: emptyList()
         }.getOrDefault(emptyList())
         val embedded = names.filter { it.isNotEmpty() && !it.endsWith(".txt") }
             .map { name -> profileFromId(context, name, dynamic = false) }
         val dynamic = runCatching {
-            dynamicDir(context).listFiles { f -> f.isFile && !f.name.endsWith(".txt") }
+            dynamicDir(context).listFiles { f -> f.isFile && !f.name.endsWith(".txt") && !f.name.startsWith(".") }
                 ?.map { it.name }
                 ?.map { name -> profileFromId(context, name, dynamic = true) }
                 ?: emptyList()

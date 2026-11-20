@@ -71,9 +71,10 @@ public final class DFBridge {
                     .setIpv4Encapsulation(encapSock, senderPort)
                     .buildTransportModeTransform(loopback, spiObj);
 
-            stageKsud(context, next, reporter);
+            stageKsud(context, next, softReboot, reporter, null);
 
-            // The Next ksud CLI rejects --soft-reboot: never pass it there.
+            // The Next ksud CLI rejects --soft-reboot: soft-reboot is handled inside
+            // the staged Next ksud binary itself (late-load -> emulated_soft_reboot).
             boolean sb = next ? false : softReboot;
             int rc = nativeRunAll(reporter, encapPort, spiVal, aesKey, hmacKey, 128 / 8, senderPort, sb);
 
@@ -89,7 +90,7 @@ public final class DFBridge {
 
     /** Stages the flavor's ksud (user-patched custom first, then bundled). */
     public static void stageKsud(Context context, boolean next, IReporter reporter) throws IOException {
-        stageKsud(context, next, reporter, null);
+        stageKsud(context, next, true, reporter, null);
     }
 
     /**
@@ -99,50 +100,114 @@ public final class DFBridge {
      */
     public static void stageKsud(Context context, boolean next, IReporter reporter,
                                  String ksudNextAsset) throws IOException {
+        stageKsud(context, next, true, reporter, ksudNextAsset);
+    }
+
+    public static File stagedBinaryFile(Context context, boolean next) {
         File root = context.getFilesDir().getParentFile();
+        if (next) {
+            File real = new File(root, "ksud-next-real");
+            if (real.isFile()) return real;
+        }
+        return new File(root, "ksud");
+    }
+
+    public static void stageKsud(Context context, boolean next, boolean softReboot,
+                                 IReporter reporter, String ksudNextAsset) throws IOException {
+        File root = context.getFilesDir().getParentFile();
+        File ksudDest = new File(root, "ksud");
+        File ksudNextReal = new File(root, "ksud-next-real");
         // User-patched ksud (Advanced -> Patch custom ko): wins over bundled.
         File custom = new File(root, next ? "ksud-custom-next" : "ksud-custom-classic");
         if (custom.isFile() && custom.length() > 100_000) {
             if (next) {
-                copyFile(custom, new File(root, "ksud-next-real"));
-                stageAsset(context, "df/ksud-wrapper-next.sh", new File(root, "ksud"), reporter);
+                copyFile(custom, ksudNextReal);
+                stageAsset(context, "df/ksud-wrapper-next.sh", ksudDest, reporter);
             } else {
-                copyFile(custom, new File(root, "ksud"));
+                ksudNextReal.delete();
+                copyFile(custom, ksudDest);
             }
             reporter.report("staged CUSTOM ksud (" + custom.length() + " bytes)\n");
             return;
         }
+        ksudNextReal.delete();
         if (!next) {
             // Classic flavor: the SELECTED classic profile wins (a ksud
             // downloaded by DfKsudUpdater = ksud-classic-latest); the bundled
             // universal is the fallback.
             java.io.File dynClassic = com.uniroot.app.newmethod.KsudClassicProfiles.selectedFile(context);
             if (dynClassic != null && dynClassic.isFile()) {
-                copyFile(dynClassic, new File(root, "ksud"));
+                copyFile(dynClassic, ksudDest);
                 reporter.report("staged DYNAMIC classic ksud (" + dynClassic.getName()
                         + ", " + dynClassic.length() + " bytes)\n");
                 return;
             }
-            stageAsset(context, "df/ksud-new-classic", new File(root, "ksud"), reporter);
+            stageAsset(context, "df/ksud-new-classic", ksudDest, reporter);
             return;
         }
-        // Next: profile chosen on the home page (e.g. 3.3.0 / 3.4.0), else
-        // the legacy bundled one. v3.4.0 daemonizes first and installs itself
-        // from current_exe — staged DIRECTLY like classic, no wrapper needed.
+        // Next: profile chosen on the home page (e.g. 3.3.0 / 3.4.0 / 3.4.2), else
+        // the bundled one.
         // DYNAMIC profile (downloaded+patched by DfKsudUpdater): a plain file
         // in filesDir/ksud-next — staged verbatim.
         java.io.File dyn = com.uniroot.app.newmethod.KsudNextProfiles.selectedFile(context);
         if (dyn != null && dyn.isFile()) {
-            copyFile(dyn, new File(root, "ksud"));
+            copyFile(dyn, ksudDest);
+            applyNextSoftRebootMode(ksudDest, softReboot);
             reporter.report("staged DYNAMIC ksud " + dyn.getName()
-                    + " (" + dyn.length() + " bytes)\n");
+                    + " (" + dyn.length() + " bytes, softReboot=" + softReboot + ")\n");
             return;
         }
         String asset = ksudNextAsset != null
                 ? ksudNextAsset
                 : com.uniroot.app.newmethod.KsudNextProfiles.resolveAsset(context);
         if (asset == null) asset = "df/ksud-new-next";
-        stageAsset(context, asset, new File(root, "ksud"), reporter);
+        if (asset.contains("3.3.0")) {
+            // 3.3.0-s938x-proven requires /data/local/tmp/.ksud-stage via wrapper
+            stageAsset(context, asset, new File(root, "ksud-next-real"), reporter);
+            stageAsset(context, "df/ksud-wrapper-next.sh", ksudDest, reporter);
+            return;
+        }
+        stageAsset(context, asset, ksudDest, reporter);
+        applyNextSoftRebootMode(ksudDest, softReboot);
+    }
+
+    /**
+     * Toggles the late-load -> emulated_soft_reboot transition in ksud Next 3.4.0 / 3.4.2
+     * according to the user's "Auto soft reboot" switch. When softReboot is true, late-load
+     * transitions directly into emulated_soft_reboot (switch_mnt_ns(1) -> stop -> on_post_fs_data
+     * -> start -> on_services -> on_boot_completed) so Zygisk (Vector), LSPosed and global
+     * module mounts start cleanly.
+     */
+    private static void applyNextSoftRebootMode(File ksudFile, boolean softReboot) {
+        try (java.io.RandomAccessFile raf = new java.io.RandomAccessFile(ksudFile, "rw")) {
+            long len = raf.length();
+            // ksud Next 3.4.2 @ file offset 0x521238 (vaddr 0x522238)
+            if (len > 0x52123cL) {
+                raf.seek(0x521238L);
+                int cur = Integer.reverseBytes(raf.readInt());
+                if (cur == 0x97ffd7a4 || cur == 0x17fff6ac) {
+                    int desired = softReboot ? 0x17fff6ac : 0x97ffd7a4;
+                    if (cur != desired) {
+                        raf.seek(0x521238L);
+                        raf.writeInt(Integer.reverseBytes(desired));
+                    }
+                    return;
+                }
+            }
+            // ksud Next 3.4.0 @ file offset 0x3af7c8 (vaddr 0x3b07c8)
+            if (len > 0x3af7ccL) {
+                raf.seek(0x3af7c8L);
+                int cur = Integer.reverseBytes(raf.readInt());
+                if (cur == 0x97ffd858 || cur == 0x17fff6fb) {
+                    int desired = softReboot ? 0x17fff6fb : 0x97ffd858;
+                    if (cur != desired) {
+                        raf.seek(0x3af7c8L);
+                        raf.writeInt(Integer.reverseBytes(desired));
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     private static void copyFile(File src, File dest) throws IOException {

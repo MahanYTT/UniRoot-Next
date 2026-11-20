@@ -27,5 +27,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "UniRoot"
+rootProject.name = "UniRoot-Next"
 include(":app")

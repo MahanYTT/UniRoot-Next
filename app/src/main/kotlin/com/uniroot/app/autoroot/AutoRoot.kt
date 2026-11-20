@@ -110,7 +110,7 @@ class AutoRootService : Service() {
             else getString(R.string.autoroot_preparing)
         val startNotif = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("UniRoot")
+            .setContentTitle("UniRoot Next")
             .setContentText(preparingText)
             .setOngoing(true)
             .build()
@@ -318,7 +318,7 @@ class AutoRootService : Service() {
         }
         val n = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("UniRoot — Instant Root")
+            .setContentTitle("UniRoot Next — Instant Root")
             .setContentText(text)
             .setAutoCancel(true)
             .apply {
@@ -416,7 +416,7 @@ class AutoRootService : Service() {
         val manager = getSystemService(NotificationManager::class.java)
         val builder = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("UniRoot")
+            .setContentTitle("UniRoot Next")
             .setContentText(text)
             .setOngoing(true)
         if (android.os.Build.VERSION.SDK_INT >= 36) {
@@ -459,7 +459,7 @@ class AutoRootService : Service() {
         val manager = getSystemService(NotificationManager::class.java)
         val builder = Notification.Builder(this, CHANNEL)
             .setSmallIcon(if (success) android.R.drawable.stat_sys_download_done else android.R.drawable.stat_notify_error)
-            .setContentTitle(if (success) "UniRoot — rooted" else "UniRoot — auto-root failed")
+            .setContentTitle(if (success) "UniRoot Next — rooted" else "UniRoot Next — auto-root failed")
             .setContentText(text)
             .setAutoCancel(true)
         if (success) {

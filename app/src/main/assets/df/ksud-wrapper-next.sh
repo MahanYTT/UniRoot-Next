@@ -11,5 +11,4 @@ REAL=/data/data/com.example.universalsystemporter/ksud-next-real
 /system/bin/cp -f "$REAL" /data/local/tmp/.ksud-stage || exit 1
 /system/bin/chmod 755 /data/local/tmp/.ksud-stage || exit 1
 /system/bin/mount -o bind /data/local/tmp/.ksud-stage /system/bin/atrace || exit 1
-/system/bin/atrace late-load &
-exit 0
+exec /system/bin/atrace late-load
