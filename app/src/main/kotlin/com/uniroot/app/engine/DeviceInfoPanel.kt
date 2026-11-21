@@ -19,6 +19,7 @@ object DeviceInfoPanel {
     private val SAMSUNG_NAMES = mapOf(
         "SM-S931" to "Galaxy S25", "SM-S936" to "Galaxy S25 Edge", "SM-S938" to "Galaxy S25 Ultra",
         "SM-S948" to "Galaxy S26 Ultra", "SM-S946" to "Galaxy S26", "SM-S943" to "Galaxy S26 Edge",
+        "SM-S911" to "Galaxy S23", "SM-S916" to "Galaxy S23+", "SM-S918" to "Galaxy S23 Ultra",
         "SM-F976" to "Galaxy Z Fold 8", "SM-F956" to "Galaxy Z Fold 7", "SM-F736" to "Galaxy Z Flip 7",
         "SM-A366" to "Galaxy A56", "SM-A556" to "Galaxy A55", "SM-A546" to "Galaxy A54",
         "SM-A356" to "Galaxy A36", "SM-A346" to "Galaxy A35",

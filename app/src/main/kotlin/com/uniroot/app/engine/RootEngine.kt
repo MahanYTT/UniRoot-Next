@@ -141,6 +141,8 @@ class RootEngine(private val context: Context) {
             "s25-zzhl-next" to listOf("cve.so", "kernelsu.ko", "ksud"),
             "s25-zzi4-next" to listOf("cve.so", "kernelsu.ko", "ksud"),
             "s26u-zzhk-next" to listOf("cve.so", "kernelsu.ko", "ksud"),
+            "s23" to listOf("cve.so", "kernelsu.ko", "ksud"),
+            "s23-next" to listOf("cve.so", "kernelsu.ko", "ksud"),
             "zfold8" to listOf("cve.so", "kernelsu.ko", "ksud"),
             "zfold8-next" to listOf("cve.so", "kernelsu.ko", "ksud"),
         )
@@ -259,10 +261,12 @@ class RootEngine(private val context: Context) {
         DefaultSpec("S25 6.6.127 ZZHL", "kernelsu", "s25-zzhl", "samsung", false),
         DefaultSpec("S25 6.6.127 ZZI4", "kernelsu", "s25-zzi4", "samsung", true),
         DefaultSpec("S26 Ultra 6.12.69 ZZHK", "kernelsu", "s26u-zzhk", "oppo", false),
+        DefaultSpec("S23 (Samsung)", "kernelsu", "s23", "samsung", false),
         DefaultSpec("S93XX (Samsung S25) Next", "kernelsu_next", "s93XX-next", "samsung", false),
         DefaultSpec("S25 6.6.127 ZZHL Next", "kernelsu_next", "s25-zzhl-next", "samsung", false),
         DefaultSpec("S25 6.6.127 ZZI4 Next", "kernelsu_next", "s25-zzi4-next", "samsung", true),
         DefaultSpec("S26 Ultra 6.12.69 ZZHK Next", "kernelsu_next", "s26u-zzhk-next", "oppo", false),
+        DefaultSpec("S23 (Samsung) Next", "kernelsu_next", "s23-next", "samsung", false),
         DefaultSpec("F976X 6.12.58", "kernelsu", "zfold8", "samsung", false),
         DefaultSpec("F976X 6.12.58 Next", "kernelsu_next", "zfold8-next", "samsung", false),
     )
@@ -615,11 +619,13 @@ class RootEngine(private val context: Context) {
             model.startsWith("SM-S948") && kernel.contains("6.12.69") -> "S26 Ultra 6.12.69 ZZHK"
             model.startsWith("SM-S931") && kernel.contains("6.6.127") && incremental.contains("ZZI4") -> "S25 6.6.127 ZZI4"
             model.startsWith("SM-S931") && kernel.contains("6.6.127") && incremental.contains("ZZHL") -> "S25 6.6.127 ZZHL"
+            model.startsWith("SM-S91") -> "S23 (Samsung)"
             else -> null
         }
         val soc = when {
             model.startsWith("SM-S948") -> "Snapdragon 8 Elite Gen 5"
             model.startsWith("SM-S93") -> "Snapdragon 8 Elite"
+            model.startsWith("SM-S91") -> "Snapdragon 8 Gen 2"
             else -> "-"
         }
         return DeviceInfo(model, kernel.ifEmpty { incremental }, soc, matched)

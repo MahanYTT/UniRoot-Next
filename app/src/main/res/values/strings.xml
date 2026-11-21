@@ -52,7 +52,7 @@
     <string name="reset_profiles">Reset profiles to defaults</string>
     <string name="reset_done">Profiles reset</string>
     <string name="view_source">Source:</string>
-    <string name="opensource_info">UniRoot Next by MahanYTT. DirtyFrag engine (CVE-2026-43284) + Samsung KDP/DEFEX KernelSU-Next &amp; Classic pipeline + UniRoot Next profiles (S25 ZZI4/ZZHL, S26U ZZHK, Z Fold 8, S93XX, Oppo). UI based on GhostLock (YuKongA).</string>
+    <string name="opensource_info">UniRoot Next by MahanYTT. DirtyFrag engine (CVE-2026-43284) + Samsung KDP/DEFEX KernelSU-Next &amp; Classic pipeline + UniRoot Next profiles (S23, S25 ZZI4/ZZHL, S26U ZZHK, Z Fold 8, S93XX, Oppo). UI based on GhostLock (YuKongA).</string>
     <string name="no_profile_selected">No profile selected</string>
     <string name="view_logs">View logs</string>
     <string name="made_by">Made by MahanYTT</string>
