@@ -77,7 +77,7 @@ The **New Method (Fast)** supports **all 8 Android GKI 2.0 Kernel Module Interfa
 | :--- | :--- | :--- | :--- | :---: | :---: |
 | **`android12-5.10`** | Linux `5.10.x` | Android 12+ | Galaxy S22 / S22+ / S22 Ultra (`SM-S901`, `SM-S906`, `SM-S908`), Galaxy Z Fold 4 / Flip 4 | ✅ `v3.4.2` | ✅ |
 | **`android13-5.10`** | Linux `5.10.x` | Android 13+ | GKI 5.10 Android 13 devices | ✅ `v3.4.2` | ✅ |
-| **`android13-5.15`** | Linux `5.15.x` | Android 13+ | Galaxy S23 / S23+ / S23 Ultra (`SM-S911`, `SM-S916`, `SM-S918`), Galaxy Z Fold 5 / Flip 5 | ✅ `v3.4.2` | ✅ |
+| **`android13-5.15`** | Linux `5.15.x` | Android 13+ | Generic GKI 5.15 Android 13 devices *(Note: Galaxy S23 series is currently not supported)* | ⚠️ Bundled KMI (S23 unsupported) | ⚠️ |
 | **`android14-5.15`** | Linux `5.15.x` | Android 14+ | GKI 5.15 Android 14 devices | ✅ `v3.4.2` | ✅ |
 | **`android14-6.1`** | Linux `6.1.x` | Android 14+ | Galaxy S24 / S24+ / S24 Ultra (`SM-S921`, `SM-S926`, `SM-S928`), Galaxy Z Fold 6 / Flip 6 | ✅ `v3.4.2` | ✅ |
 | **`android15-6.6`** | Linux `6.6.x` | Android 15 (One UI 7) | Galaxy S25 / S25+ / S25 Ultra (`SM-S931`, `SM-S936`, `SM-S938`), Galaxy Z Fold 7 / Flip 7 | ✅ `v3.4.2` | ✅ |
