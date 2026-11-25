@@ -29,7 +29,7 @@ Developed & actively maintained by **[MahanYTT](https://github.com/MahanYTT)** (
 
 ## 📖 Overview
 
-**UniRoot Next** is an all-in-one Android rooting application for **Samsung Galaxy** smartphones and **Android GKI 2.0** devices running **One UI 6, One UI 7, and One UI 8** (`Linux 5.10` through `6.18`, `Android 12` to `Android 17`).
+**UniRoot Next** is an all-in-one Android rooting application for **Samsung Galaxy** smartphones and **Android GKI 2.0** devices running **One UI 6, One UI 7, One UI 8 and One UI 9** (`Linux 5.10` through `6.18`, `Android 12` to `Android 17`).
 
 It delivers **instant, one-tap temporary & boot-persistent root access** using **KernelSU-Next (`v3.4.2`, UAPI v5)** or **KernelSU Classic**—**without unlocking the bootloader**, without tripping **Samsung Knox (`0x0`)**, and without requiring a PC, Odin, or custom recovery (TWRP).
 
