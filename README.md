@@ -121,20 +121,6 @@ For devices using the classic profile-based method, the following validated prof
 
 ---
 
-## 🧬 Zygisk (Vector) & LSPosed Support
-
-Why did **LSPosed** and **Vector (Zygisk)** previously fail to start on late-loaded KernelSU-Next, and how does **UniRoot Next `v5.2.1+`** solve it?
-
-1. **Global Mount Namespace Escape (`switch_mnt_ns(1)`)**:
-   - During DirtyFrag late-loading, the exploit shellcode isolates its mount namespace via `unshare(CLONE_NEWNS)` and `mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL)` to safely bind-mount `ksud`.
-   - Standard upstream `ksud late-load` does not switch back to `/proc/1/ns/mnt` and does not run `post-fs-data.sh`, causing any module overlays or Zygisk preparation to remain trapped in a temporary namespace that disappears when `ksud` exits.
-   - **UniRoot Next** patches `ksud` Next (`3.4.2` and `3.4.0`) so that when **Auto soft reboot** is enabled, `late-load` transitions directly into `emulated_soft_reboot`, which calls `switch_mnt_ns(1)` to enter `init`'s global mount namespace, stops Zygote, runs `on_post_fs_data()` (`post-fs-data.sh` + `metamount.sh`), restarts Zygote, and runs `on_services()` + `on_boot_completed()`.
-2. **UAPI v5 `EVENT_SERVICES = 4` Kernel Patch**:
-   - KernelSU-Next `v3.4.2` introduced `EVENT_SERVICES = 4` in `KSU_IOCTL_REPORT_EVENT` (`0x4b03`) and requires the kernel module's `do_report_event` handler to return `1` before running `service.d` and module `service.sh` scripts.
-   - All 8 Samsung KDP+DEFEX `.ko` modules in **UniRoot Next** are patched to return `1` (`mov w0, #1`), ensuring `on_services()` executes `lspd` (LSPosed daemon) and Vector's service scripts on every soft-reboot.
-
----
-
 ## ❓ FAQ & Troubleshooting
 
 <details>
