@@ -75,7 +75,7 @@ class DfBootService : Service() {
         try {
             val prefs = createDeviceProtectedStorageContext()
                 .getSharedPreferences(NewMethodBootReceiver.PREFS, Context.MODE_PRIVATE)
-            val next = prefs.getBoolean(NewMethodBootReceiver.PREF_NEXT, false)
+            val next = prefs.getBoolean(NewMethodBootReceiver.PREF_NEXT, true)
             val softReboot = prefs.getBoolean(NewMethodBootReceiver.PREF_AUTO_SOFT_REBOOT, true)
 
             // 1. Wait for the first unlock (CE storage) — ≤4 min.

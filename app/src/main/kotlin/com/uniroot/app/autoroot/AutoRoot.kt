@@ -364,31 +364,38 @@ class AutoRootService : Service() {
     /** Always-on-top banner shown only while the exploit is actually running. */
     private fun showOverlay(text: String) {
         if (!AndroidSettings.canDrawOverlays(this)) return
-        val wm = getSystemService(WindowManager::class.java)
-        overlayView?.let { runCatching { wm.removeView(it) } }
-        val tv = TextView(this).apply {
-            this.text = text
-            setTextColor(-0x1)
-            setBackgroundColor(0xCC101820.toInt())
-            gravity = Gravity.CENTER
-            setPadding(32, 28, 32, 28)
-            textSize = 16f
+        mainHandler.post {
+            runCatching {
+                val wm = getSystemService(WindowManager::class.java)
+                overlayView?.let { runCatching { wm.removeView(it) } }
+                val tv = TextView(this).apply {
+                    this.text = text
+                    setTextColor(-0x1)
+                    setBackgroundColor(0xCC101820.toInt())
+                    gravity = Gravity.CENTER
+                    setPadding(32, 28, 32, 28)
+                    textSize = 16f
+                }
+                val params = WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                    android.graphics.PixelFormat.TRANSLUCENT,
+                )
+                params.gravity = Gravity.TOP
+                wm.addView(tv, params)
+                overlayView = tv
+            }
         }
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-            android.graphics.PixelFormat.TRANSLUCENT,
-        )
-        params.gravity = Gravity.TOP
-        runCatching { wm.addView(tv, params); overlayView = tv }
     }
 
     private fun hideOverlay() {
-        overlayView?.let { v -> runCatching { getSystemService(WindowManager::class.java).removeView(v) } }
-        overlayView = null
+        mainHandler.post {
+            overlayView?.let { v -> runCatching { getSystemService(WindowManager::class.java).removeView(v) } }
+            overlayView = null
+        }
     }
 
     /**
@@ -466,7 +473,7 @@ class AutoRootService : Service() {
             // Open the manager of the flavor that was actually rooted
             // (recorded at root time) — never the other one.
             val next = getSharedPreferences("uniroot_prefs", Context.MODE_PRIVATE)
-                .getString("loaded_flavor", "kernelsu") == "kernelsu_next"
+                .getString("loaded_flavor", "kernelsu_next") == "kernelsu_next"
             val pkg = if (next) "com.rifsxd.ksunext" else "me.weishu.kernelsu"
             packageManager.getLaunchIntentForPackage(pkg)?.let { launch ->
                 val pi = PendingIntent.getActivity(
@@ -514,8 +521,12 @@ class InstallStatusReceiver : BroadcastReceiver() {
         )
         when (status) {
             android.content.pm.PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                @Suppress("DEPRECATION")
-                val confirm: Intent? = intent.getParcelableExtra(Intent.EXTRA_INTENT)
+                val confirm: Intent? = if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(Intent.EXTRA_INTENT)
+                }
                 confirm?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 runCatching { if (confirm != null) context.startActivity(confirm) }
             }
