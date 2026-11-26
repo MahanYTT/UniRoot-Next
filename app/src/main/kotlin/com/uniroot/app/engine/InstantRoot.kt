@@ -303,7 +303,8 @@ class InstantRoot(private val context: Context, private val log: (String) -> Uni
                 apk.inputStream().use { it.copyTo(out) }
                 session.fsync(out)
             }
-            val statusIntent = Intent(ACTION_INSTALL_STATUS).setPackage(context.packageName)
+            val statusIntent = Intent(context, com.uniroot.app.autoroot.InstallStatusReceiver::class.java)
+                .setAction(ACTION_INSTALL_STATUS)
             val sender = android.app.PendingIntent.getBroadcast(
                 context, sessionId, statusIntent,
                 android.app.PendingIntent.FLAG_MUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,

@@ -37,17 +37,27 @@ All bundled **KernelSU-Next** and **KernelSU** Loadable Kernel Modules (`kernels
 
 ---
 
-## ✨ What's New in UniRoot Next (`v5.2.1`)
+## ✨ What's New in UniRoot Next (`v5.3.0`)
 
-- **Full LSPosed, Vector (Zygisk) & Global Module Mount Support (`v5.2.1`)**
+- **Complete UI Overhaul (3-Tab Home / Logs / Settings Architecture)**
+  - Redesigned light (*Alabaster Slate*) and dark (*Obsidian Slate*) Miuix themes with a live pulse Hero Status Card, smooth sliding-thumb segmented controls, tactile *Root Now* CTA (morphing into a live progress bar while running), 4-step root execution & 5-step `ksud` patcher checklists, searchable & tone-filterable Live Console + status-rail Run History, and foldable/tablet two-column adaptation (`>= 720dp`).
+  - **New Exploit** and **KernelSU-Next** are now first and selected by default across both the UI and boot auto-root preferences.
+- **Built-In App Self-Updater (GitHub Releases)**
+  - Checks `MahanYTT/UniRoot-Next` releases automatically (rate-limit safe 6-hour cache + `If-None-Match` ETag), renders Markdown changelogs, streams APK downloads with live MB/s progress and cancel support, verifies SHA-256 integrity + release signing certificate compatibility, handles Android's *Install Unknown Apps* permission flow cleanly (even across process restarts), and auto-cleans stale APKs.
+- **Overhauled Device Detection & Per-Method Compatibility Engine**
+  - Fixed GKI KMI extraction (`6.6.127-android15-...` → `android15-6.6`, eliminating `· null`), fixed Samsung One UI integer decoding (`80100` → `8.1`), corrected and expanded Samsung (S22–S26, Z Fold/Flip 4–8, A34–A56, Tab S9/S10) + non-Samsung marketing names, added friendly SoC names, Bootloader, Knox, SELinux, and installed Manager version detection — all running off the main thread.
+  - Collapsed Home card shows a 5-chip Compatibility Matrix (`KMI`, `ABI`, `Knox`, `SELinux`, `Manager`) and expands into full hardware telemetry with RAM/Storage bars and one-tap *Copy Diagnostics*.
+- **Smart `ksud` Updater & Patcher Reliability Fixes**
+  - Recognizes bundled `3.4.2-kdp-samsung` as up to date for upstream `v3.4.2` via semantic version comparison + background ETag checks, replacing the permanent blue button with a calm *"up to date"* strip that only expands into an *Update* CTA when a newer upstream release exists.
+  - Fixed native `Inflater` leaks (~1.1M handles/run), 64 MB upfront buffer churn, the 256 KB tail scan blind spot, `compressBest()` slot-overflow guard, and Root My Galaxy's exact-size download off-by-one bug.
+
+### Earlier Highlights (`v5.2.1`)
+
+- **Full LSPosed, Vector (Zygisk) & Global Module Mount Support**
   - **Fixed `KSU_IOCTL_REPORT_EVENT` (`EVENT_SERVICES = 4`) across all 8 Samsung KDP+DEFEX `.ko` modules (`android12-5.10` → `android17-6.18`)**: KernelSU-Next `v3.4.2` (`UAPI v5`) verifies that `ioctl(KSU_IOCTL_REPORT_EVENT, &4)` returns `1` before running `/data/adb/service.d/*.sh` and module `service.sh` scripts. All 8 bundled Samsung KDP modules now return `1`, ensuring **LSPosed (`lspd`)**, **Vector**, and all service-stage root modules launch reliably.
   - **Fixed KernelSU-Next `late-load` Private Mount Namespace & Soft-Reboot Pipeline**: Patched `ksud` Next `3.4.2` and `3.4.0` (plus the in-app `DfKsudUpdater` patcher) so `late-load` transitions directly into `emulated_soft_reboot` (`switch_mnt_ns(1)` → `stop` → `on_post_fs_data` → `start` → `on_services` → `on_boot_completed`). This escapes the temporary `MS_PRIVATE` mount namespace into **PID 1's global mount namespace (`/proc/1/ns/mnt`)**, allowing Zygisk (`Vector` / `Zygisk Next` / `ReZygisk`), **LSPosed**, and metamodule overlay mounts (`metamount.sh`) to hook Zygote and persist across all apps.
 - **Native KernelSU-Next `v3.4.2` (`33355`, UAPI v5) Support**
   - Added the built-in `3.4.2-kdp-samsung` profile and updated all 8 Samsung KDP+DEFEX `.ko` modules to report `version = 33355`, `uapi_version = 5`, and tag `v3.4.2` (eliminating the *"Kernel update required"* warning in KernelSU-Next Manager).
-- **Fixed In-App `ksud` Updater (`two slots` Error & Auto-Purge)**
-  - Filtered out embedded `susfs` `.ko` streams when patching official KernelSU-Next `ksud` releases on-device, added `aarch64_${kmi}_kernelsu.ko` asset resolution, restored the *"You are already updated"* check, and added automatic cache invalidation (`KO_PATCH_REV`) when upgrading the app.
-- **Fixed New Method Profile & Instant Root Staging**
-  - `DFBridge`, `GhostSamRunner`, and `MainActivity` now accurately stage the active `ksud` profile (including `3.3.0-s938x-proven` via `ksud-wrapper-next.sh` and custom/dynamic profiles) for both manual rooting and boot re-rooting.
 - **Persistent Release Keystore & Automated GitHub Releases**
   - Signed with a persistent release key so APK updates install cleanly in-place over previous versions without losing app settings or profiles.
 
@@ -57,9 +67,10 @@ All bundled **KernelSU-Next** and **KernelSU** Loadable Kernel Modules (`kernels
 
 | Feature | Description |
 | :--- | :--- |
-| **⚡ New Method (Fast / Unprivileged)** | Powered by the **DirtyFrag (`CVE-2026-43284`)** engine. Allocates an IPsec SA via Android's public `IpSecManager`, patches the kernel page cache, and late-loads `ksud` directly from memory. **No Shizuku, no ADB, no PC, and no device profile required** — just tap **Root now**. |
+| **⚡ New Method (Fast / Unprivileged)** | Powered by the **DirtyFrag (`CVE-2026-43284`)** engine — selected by default. Allocates an IPsec SA via Android's public `IpSecManager`, patches the kernel page cache, and late-loads `ksud` directly from memory. **No Shizuku, no ADB, no PC, and no device profile required** — just tap **Root now**. |
 | **🛡️ Samsung KDP & DEFEX Bypass** | Includes 8 pre-patched Samsung KDP + DEFEX `kernelsu.ko` kernel modules (`5.10` to `6.18`) for both **KernelSU-Next** and **KernelSU Classic**, bypassing Samsung Knox Kernel Data Protection and DEFEX execution restrictions on stock kernels. |
-| **🔄 In-App `ksud` Updater & On-Device Patcher** | One-tap **Update ksud Next / Classic** button fetches the latest official `ksud` binary from GitHub (`KernelSU-Next/KernelSU-Next` or `tiann/KernelSU`) and injects the 8 Samsung KDP+DEFEX `.ko` modules + soft-reboot patch directly on your phone using raw DEFLATE stream replacement. |
+| **📲 In-App Self-Updater** | Automatically checks `MahanYTT/UniRoot-Next` GitHub Releases with ETag caching, displays release notes, streams APK updates with SHA-256 and signing-certificate verification, and launches Android's installer in one tap. |
+| **🔄 Smart `ksud` Updater & On-Device Patcher** | Automatically checks upstream `KernelSU-Next` / `KernelSU` releases against bundled & dynamic profiles, showing a calm *up to date* strip when current and offering one-tap on-device raw DEFLATE patching with the 8 Samsung KDP+DEFEX `.ko` modules whenever a newer version drops. |
 | **🧩 Zygisk (Vector / ReZygisk) & LSPosed Ready** | Full lifecycle execution (`post-fs-data.d`, module `post-fs-data.sh`, `system.prop`, `sepolicy.rule`, `metamount.sh`, `service.d`, `service.sh`, and `boot-completed.sh`) inside PID 1's global mount namespace via automated `ksud` soft-reboot. |
 | **🔁 Auto-Root on Boot & Instant Root** | Foreground boot service (`DfBootService`) and `DFReroot` second-stage helper automatically re-root your device on every boot right after the first screen unlock, keeping a partial WakeLock so rooting never stalls. |
 | **🎛️ Dual Flavor & Profile Selector** | Switch seamlessly between **KernelSU-Next** (`com.rifsxd.ksunext`) and **KernelSU Classic** (`me.weishu.kernelsu`), and choose between built-in profiles (`3.4.2-kdp-samsung`, `3.4.0-kdp-samsung`, `3.3.0-s938x-proven`) or dynamically patched releases. |

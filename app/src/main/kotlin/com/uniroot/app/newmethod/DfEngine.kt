@@ -77,7 +77,11 @@ object DfEngine {
             done.set(true)
             ticker.join(1500)
         }
-        onProgress(100, if (rc == 0) "Phone rooted ✓" else "Failed (engine rc=$rc) - see log")
+        if (rc == 0) {
+            onProgress(100, "Phone rooted ✓")
+        } else {
+            onProgress(milestone.coerceAtMost(90), "Failed (engine rc=$rc) — see log")
+        }
         return rc
     }
 }

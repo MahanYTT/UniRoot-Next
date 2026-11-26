@@ -1,22 +1,13 @@
 package com.uniroot.app.newmethod
 
 import android.content.Context
+import com.uniroot.app.engine.SemVer
 import java.io.File
 
 /**
- * Profils ksud CLASSIC de la new méthode — le miroir de KsudNextProfiles
- * pour la flavor KernelSU classic.
- *
- * DEUX SOURCES :
- *  1. EMBARQUÉ — le ksud universal de l'APK (df/ksud-new-classic), toujours
- *     présent, id "bundled-universal".
- *  2. DYNAMIQUE — filesDir/ksud-classic-latest : le ksud téléchargé + patché
- *     par DfKsudUpdater (bouton « Update ksud classic »). Le tag de la
- *     release vit dans ksud-classic-latest.tag. Un seul slot dynamique : un
- *     nouveau téléchargement remplace le précédent.
- *
- * DFBridge.stageKsud stage selectedFile() si le profil choisi est dynamique,
- * sinon l'asset embarqué.
+ * Classic KernelSU ksud profiles for New Method:
+ * 1. Bundled: `assets/df/ksud-new-classic` (v3.3.0 universal Samsung KDP+DEFEX).
+ * 2. Dynamic: `filesDir/ksud-classic-latest` downloaded & patched by `DfKsudUpdater`.
  */
 object KsudClassicProfiles {
 
@@ -24,19 +15,45 @@ object KsudClassicProfiles {
     private const val PREF_KEY = "ksud_classic_profile"
     private const val MODE = Context.MODE_PRIVATE
 
+    /** Version of the bundled `assets/df/ksud-new-classic` binary (code 32653). */
+    const val BUNDLED_VERSION = "3.3.0"
+
+    /** Bumped whenever bundled `assets/df/samsung-ko-classic` modules change. */
+    const val KO_PATCH_REV = "v5.2.0-classic-kdp"
+
     data class ClassicProfile(
-        val id: String,       // "bundled-universal" ou la version ("3.3.0")
-        val label: String,    // affichage bande
+        val id: String,       // "bundled-universal" or "<version>-<code>"
+        val label: String,    // display label
         val note: String,     // description
-        val dynamic: Boolean, // true = téléchargé (ksud-classic-latest)
+        val dynamic: Boolean, // true = downloaded (ksud-classic-latest)
+        val version: String = BUNDLED_VERSION,
     )
 
     fun latestFile(context: Context): File = File(context.filesDir, "ksud-classic-latest")
 
     private fun markerFile(context: Context): File = File(context.filesDir, "ksud-classic-latest.tag")
 
-    /** "3.3.0-32601" — written by the updater, used as the profile label. */
     private fun nameFile(context: Context): File = File(context.filesDir, "ksud-classic-latest.name")
+
+    private fun revFile(context: Context): File = File(context.filesDir, "ksud-classic-latest.rev")
+
+    private fun ensureFreshDynamic(context: Context) {
+        runCatching {
+            val rf = revFile(context)
+            val current = if (rf.isFile) rf.readText().trim() else ""
+            if (current != KO_PATCH_REV) {
+                if (latestFile(context).isFile) {
+                    latestFile(context).delete()
+                    markerFile(context).delete()
+                    nameFile(context).delete()
+                    if (selectedId(context) != "bundled-universal") {
+                        setSelected(context, "bundled-universal")
+                    }
+                }
+                rf.writeText(KO_PATCH_REV)
+            }
+        }
+    }
 
     private fun latestName(context: Context): String? =
         nameFile(context).takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotEmpty() }
@@ -44,56 +61,68 @@ object KsudClassicProfiles {
     private fun latestTag(context: Context): String? =
         markerFile(context).takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotEmpty() }
 
-    /** Profils classic : le dynamique (s'il existe) d'abord, puis l'embarqué. */
     fun list(context: Context): List<ClassicProfile> {
+        ensureFreshDynamic(context)
         val out = ArrayList<ClassicProfile>()
         val tag = latestTag(context)
         if (tag != null && latestFile(context).isFile) {
-            // Profile id = "version-5-digit-code" (e.g. "3.3.0-32601"),
-            // fallback on the bare version when the name file is absent.
-            val name = latestName(context) ?: tag.removePrefix("v")
-            out.add(ClassicProfile(
-                id = name,
-                label = name,
-                note = "official ksud $tag + Samsung KDP+DEFEX kos - patched on device",
-                dynamic = true))
+            val ver = tag.removePrefix("v").removePrefix("V")
+            val name = latestName(context) ?: ver
+            out.add(
+                ClassicProfile(
+                    id = name,
+                    label = name,
+                    note = "Official ksud $tag + Samsung KDP+DEFEX modules (patched on-device)",
+                    dynamic = true,
+                    version = ver,
+                )
+            )
         }
-        out.add(ClassicProfile(
-            id = "bundled-universal",
-            label = "Bundled universal",
-            note = "the ksud bundled in the APK",
-            dynamic = false))
+        out.add(
+            ClassicProfile(
+                id = "bundled-universal",
+                label = "$BUNDLED_VERSION · bundled-universal",
+                note = "Bundled universal KernelSU Classic binary with Samsung KDP+DEFEX modules",
+                dynamic = false,
+                version = BUNDLED_VERSION,
+            )
+        )
         return out
+    }
+
+    fun highestVersion(context: Context): String {
+        val candidates = list(context).map { it.version }
+        return candidates.maxWithOrNull { a, b ->
+            val sa = SemVer.parse(a)
+            val sb = SemVer.parse(b)
+            if (sa != null && sb != null) sa.compareTo(sb) else a.compareTo(b)
+        } ?: BUNDLED_VERSION
     }
 
     fun selectedId(context: Context): String =
         context.getSharedPreferences(PREFS, MODE).getString(PREF_KEY, "") ?: ""
 
-    /** Sélection persistée, sinon le premier de la liste. */
-    fun selected(context: Context): ClassicProfile? =
-        list(context).firstOrNull { it.id == selectedId(context) } ?: list(context).firstOrNull()
+    fun selected(context: Context): ClassicProfile? {
+        val items = list(context)
+        return items.firstOrNull { it.id == selectedId(context) } ?: items.firstOrNull()
+    }
 
     fun setSelected(context: Context, id: String) {
         context.getSharedPreferences(PREFS, MODE).edit().putString(PREF_KEY, id).apply()
     }
 
-    /**
-     * Fichier à stager pour le profil choisi — null = profil embarqué
-     * (DFBridge stage alors l'asset df/ksud-new-classic).
-     */
     @JvmStatic
     fun selectedFile(context: Context): File? {
         val p = selected(context) ?: return null
         return if (p.dynamic && latestFile(context).isFile) latestFile(context) else null
     }
 
-    /** Enregistre le résultat de l'updater et le SÉLECTIONNE. */
     fun selectLatest(context: Context, name: String, note: String) {
+        revFile(context).writeText(KO_PATCH_REV)
         nameFile(context).writeText(name)
         setSelected(context, name)
     }
 
-    /** Supprime le ksud téléchargé (fichier + tag) et rebascule sur l'embarqué. */
     fun deleteLatest(context: Context): Boolean {
         val f = latestFile(context)
         val existed = f.isFile

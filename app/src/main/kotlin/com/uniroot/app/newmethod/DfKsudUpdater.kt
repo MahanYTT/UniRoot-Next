@@ -1,6 +1,12 @@
 package com.uniroot.app.newmethod
 
 import android.content.Context
+import com.uniroot.app.BuildConfig
+import com.uniroot.app.engine.SemVer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -9,23 +15,23 @@ import java.util.zip.Deflater
 import java.util.zip.Inflater
 import java.util.zip.ZipException
 
+sealed class KsudUpdateCheckState {
+    data object Idle : KsudUpdateCheckState()
+    data class Checking(val localVersion: String) : KsudUpdateCheckState()
+    data class UpToDate(val localVersion: String, val remoteTag: String, val checkedAtMs: Long) : KsudUpdateCheckState()
+    data class UpdateAvailable(
+        val localVersion: String,
+        val remoteTag: String,
+        val niceName: String,
+        val repo: String,
+    ) : KsudUpdateCheckState()
+    data class Error(val localVersion: String, val message: String) : KsudUpdateCheckState()
+}
+
 /**
- * THE SCRIPT, in the app (NotStable): downloads the LATEST official ksud
- * (KernelSU Next OR classic, per the selected flavor) and patches it with
- * the 8 Samsung KDP+DEFEX kos bundled in the APK — the exact port of
- * patch-ksud-next.py.
- *
- * How it works (README-PATCH): ksud embeds its assets via rust-embed +
- * include-flate = raw DEFLATE streams glued into .rodata. At runtime the
- * decoder stops at the final block and IGNORES the following bytes -> a
- * shorter replacement stream + zero-padding works, no section moved. No
- * hash is verified at runtime.
- *
- * Already up to date? -> "you are already updated".
- * - Next: the result lands in filesDir/ksud-next/ = a ksud Next profile,
- *   auto-selected (KsudNextProfiles.addDynamic).
- * - Classic: the result lands in filesDir/ksud-classic-latest, which
- *   DFBridge.stageKsud stages automatically for the classic flavor.
+ * Downloads the latest official `ksud` (KernelSU-Next or KernelSU Classic) from GitHub Releases
+ * and injects the 8 bundled Samsung KDP+DEFEX `kernelsu.ko` modules in-place via raw DEFLATE
+ * stream replacement + zero-padding (no ELF section shifted).
  */
 object DfKsudUpdater {
 
@@ -35,39 +41,201 @@ object DfKsudUpdater {
     private const val KO_ASSET_DIR_CLASSIC = "df/samsung-ko-classic"
     private val KMIS = listOf(
         "android12-5.10", "android13-5.10", "android13-5.15", "android14-5.15",
-        "android14-6.1", "android15-6.6", "android16-6.12", "android17-6.18")
+        "android14-6.1", "android15-6.6", "android16-6.12", "android17-6.18",
+    )
 
-    /** journal -> UI + logcat */
-    var log: ((String) -> Unit)? = null
-    private fun say(msg: String) { log?.invoke(msg); android.util.Log.i("DfKsudUpd", msg) }
+    private const val PREFS = "uniroot_prefs"
+    private const val CACHE_TTL_MS = 6L * 60L * 60L * 1000L // 6 hours
+    private const val MAX_ELF_INFLATE_BYTES = 48 shl 20
+
+    private data class ReleaseMeta(
+        val tag: String,
+        val repo: String,
+        val json: String,
+        val niceName: String,
+        val ksudDownloadUrl: String,
+    )
+
+    private fun localBestVersion(context: Context, classic: Boolean): String =
+        if (classic) KsudClassicProfiles.highestVersion(context)
+        else KsudNextProfiles.highestVersion(context)
+
+    private fun isRemoteNewer(remoteTag: String, localVerStr: String): Boolean {
+        val remote = SemVer.parse(remoteTag)
+        val local = SemVer.parse(localVerStr)
+        return if (remote != null && local != null) remote > local
+        else remoteTag.removePrefix("v").removePrefix("V") != localVerStr.removePrefix("v").removePrefix("V")
+    }
 
     // ------------------------------------------------------------------
-    // Deflate / inflate (java.util.zip, nowrap = raw deflate)
+    // Lightweight background release check (6h TTL + ETag)
     // ------------------------------------------------------------------
 
-    private fun inflateRaw(data: ByteArray, off: Int, limitBytes: Int, maxOut: Int): ByteArray? {
+    suspend fun checkLatest(
+        context: Context,
+        classic: Boolean,
+        forceRefresh: Boolean = false,
+    ): KsudUpdateCheckState = withContext(Dispatchers.IO) {
+        val localVer = localBestVersion(context, classic)
+        val prefix = if (classic) "ksud_chk_classic_" else "ksud_chk_next_"
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val lastMs = prefs.getLong("${prefix}last_ms", 0L)
+        val cachedTag = prefs.getString("${prefix}tag", null)
+        val cachedCode = prefs.getString("${prefix}code", null)
+        val cachedRepo = prefs.getString("${prefix}repo", null)
+        val cachedEtag = prefs.getString("${prefix}etag", null)
+
+        if (!forceRefresh && !cachedTag.isNullOrBlank() && (now - lastMs) in 0 until CACHE_TTL_MS) {
+            return@withContext buildCheckState(localVer, cachedTag, cachedCode, cachedRepo ?: "", lastMs)
+        }
+
+        val repos = if (classic) REPOS_CLASSIC else REPOS_NEXT
+        var lastError = "GitHub API unreachable"
+        for (repo in repos) {
+            val url = "https://api.github.com/repos/$repo/releases/latest"
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 12_000
+                readTimeout = 18_000
+                instanceFollowRedirects = true
+                setRequestProperty("Accept", "application/vnd.github+json")
+                setRequestProperty("User-Agent", "UniRoot-Next/${BuildConfig.VERSION_NAME}")
+                if (!cachedEtag.isNullOrBlank() && !cachedTag.isNullOrBlank() && cachedRepo == repo) {
+                    setRequestProperty("If-None-Match", cachedEtag)
+                }
+            }
+            try {
+                conn.connect()
+                val code = conn.responseCode
+                if (code == HttpURLConnection.HTTP_NOT_MODIFIED && !cachedTag.isNullOrBlank()) {
+                    prefs.edit().putLong("${prefix}last_ms", now).apply()
+                    return@withContext buildCheckState(localVer, cachedTag, cachedCode, repo, now)
+                }
+                if (code == 403) {
+                    val rem = conn.getHeaderField("X-RateLimit-Remaining")
+                    lastError = if (rem == "0") "Rate limited (60/hr)" else "HTTP 403"
+                    continue
+                }
+                if (code !in 200..299) {
+                    lastError = "HTTP $code"
+                    continue
+                }
+                val json = conn.inputStream.bufferedReader().use { it.readText() }
+                val meta = parseReleaseMeta(json, repo)
+                if (meta != null) {
+                    val newEtag = conn.getHeaderField("ETag")
+                    val apkCode = extractApkCode(json)
+                    prefs.edit()
+                        .putLong("${prefix}last_ms", now)
+                        .putString("${prefix}tag", meta.tag)
+                        .putString("${prefix}code", apkCode ?: "")
+                        .putString("${prefix}repo", repo)
+                        .apply { if (!newEtag.isNullOrBlank()) putString("${prefix}etag", newEtag) }
+                        .apply()
+                    return@withContext buildCheckState(localVer, meta.tag, apkCode, repo, now)
+                }
+            } catch (e: Exception) {
+                lastError = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+            } finally {
+                conn.disconnect()
+            }
+        }
+
+        if (!forceRefresh && !cachedTag.isNullOrBlank()) {
+            return@withContext buildCheckState(localVer, cachedTag, cachedCode, cachedRepo ?: "", lastMs)
+        }
+        KsudUpdateCheckState.Error(localVer, lastError)
+    }
+
+    private fun buildCheckState(
+        localVer: String,
+        remoteTag: String,
+        apkCode: String?,
+        repo: String,
+        checkedAtMs: Long,
+    ): KsudUpdateCheckState {
+        val ver = remoteTag.removePrefix("v").removePrefix("V")
+        val nice = if (!apkCode.isNullOrBlank()) "$ver-$apkCode" else "$ver-samsung"
+        return if (isRemoteNewer(remoteTag, localVer)) {
+            KsudUpdateCheckState.UpdateAvailable(localVer, remoteTag, nice, repo)
+        } else {
+            KsudUpdateCheckState.UpToDate(localVer, remoteTag, checkedAtMs)
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Deflate / inflate (reusable Inflater, zero native leaks, chunked RAM)
+    // ------------------------------------------------------------------
+
+    /** Inflates up to [out.size] header bytes using a reused [Inflater] without allocating per offset. */
+    private fun probeHeader(inf: Inflater, data: ByteArray, off: Int, out: ByteArray): Int {
+        val limit = minOf(262_144, data.size - off)
+        if (limit <= 0) return -1
         return try {
-            val inf = Inflater(true)
-            inf.setInput(data, off, limitBytes)
-            val out = ByteArray(maxOut)
+            inf.reset()
+            inf.setInput(data, off, limit)
             val n = inf.inflate(out)
+            if (n > 0) n else -1
+        } catch (_: ZipException) {
+            -1
+        } catch (_: Exception) {
+            -1
+        }
+    }
+
+    /**
+     * Inflates a full raw DEFLATE stream in ONE pass into a chunked [ByteArrayOutputStream],
+     * verifying `inf.finished()` and returning `Pair(payload, consumedCompressedBytes)`.
+     * Avoids allocating 64 MB upfront and eliminates double inflation.
+     */
+    private fun inflateFull(data: ByteArray, off: Int): Pair<ByteArray, Int>? {
+        val inputLen = data.size - off
+        if (inputLen <= 0) return null
+        val inf = Inflater(true)
+        return try {
+            inf.setInput(data, off, inputLen)
+            val out = ByteArrayOutputStream(65_536)
+            val chunk = ByteArray(65_536)
+            while (!inf.finished()) {
+                val n = inf.inflate(chunk)
+                if (n > 0) {
+                    if (out.size() + n > MAX_ELF_INFLATE_BYTES) return null
+                    out.write(chunk, 0, n)
+                } else {
+                    if (inf.needsInput() || inf.needsDictionary()) break
+                }
+            }
+            if (!inf.finished() || out.size() == 0) return null
+            val consumed = inputLen - inf.remaining
+            if (consumed <= 0) return null
+            out.toByteArray() to consumed
+        } catch (_: Exception) {
+            null
+        } finally {
             inf.end()
-            if (n <= 0) null else out.copyOf(n)
-        } catch (e: ZipException) { null } catch (e: Exception) { null }
+        }
     }
 
     private fun deflateRaw(raw: ByteArray, level: Int, strategy: Int): ByteArray {
         val def = Deflater(level, true)
-        def.setStrategy(strategy)
-        def.setInput(raw)
-        def.finish()
-        val buf = ByteArray(raw.size + raw.size / 16 + 256)
-        val n = def.deflate(buf)
-        def.end()
-        return buf.copyOf(n)
+        return try {
+            def.setStrategy(strategy)
+            def.setInput(raw)
+            def.finish()
+            val out = ByteArrayOutputStream(raw.size / 2 + 1024)
+            val chunk = ByteArray(32_768)
+            while (!def.finished()) {
+                val n = def.deflate(chunk)
+                if (n > 0) out.write(chunk, 0, n)
+                else if (def.needsInput()) break
+            }
+            out.toByteArray()
+        } finally {
+            def.end()
+        }
     }
 
-    /** Smallest raw deflate stream that fits maxSize (like the .py). */
+    /** Returns the smallest raw DEFLATE stream that strictly fits within [maxSize], or null if impossible. */
     private fun compressBest(raw: ByteArray, maxSize: Int): ByteArray? {
         var best: ByteArray? = null
         for (level in intArrayOf(9, 6, 1)) {
@@ -77,7 +245,7 @@ object DfKsudUpdater {
                 if (comp.size <= maxSize) return comp
             }
         }
-        return best
+        return best?.takeIf { it.size <= maxSize }
     }
 
     private fun containsBytes(data: ByteArray, needle: ByteArray): Boolean {
@@ -100,7 +268,7 @@ object DfKsudUpdater {
     }
 
     // ------------------------------------------------------------------
-    // Stream scan (faithful port of scan_streams)
+    // Stream scan (reusable Inflater — zero native leak, full-file coverage)
     // ------------------------------------------------------------------
 
     private class Stream(val start: Int, val consumed: Int, val payload: ByteArray) {
@@ -111,46 +279,42 @@ object DfKsudUpdater {
         var how: String = ""
     }
 
-    private fun consumedBytes(data: ByteArray, off: Int): Int {
-        val inf = Inflater(true)
-        inf.setInput(data, off, data.size - off)
-        val buf = ByteArray(64 shl 20)
-        return try {
-            inf.inflate(buf)
-            data.size - off - inf.remaining
-        } finally {
-            inf.end()
-        }
-    }
-
     private fun scanStreams(data: ByteArray): List<Stream> {
         val out = ArrayList<Stream>()
-        var off = 0
-        val n = data.size - 64
-        while (off < n) {
-            // First deflate byte: only dynamic blocks (BTYPE=2) are candidates
-            val b = data[off].toInt() and 7
-            if (b == 4 || b == 5) {
-                val head = inflateRaw(data, off, 262144, 4096)
-                if (head != null && head.size >= 4 && head[0] == 0x7f.toByte() &&
-                    head[1] == 'E'.code.toByte() && head[2] == 'L'.code.toByte() &&
-                    head[3] == 'F'.code.toByte()) {
-                    val full = inflateRaw(data, off, data.size - off, 64 shl 20)
-                    if (full != null) {
-                        val used = consumedBytes(data, off)
-                        out.add(Stream(off, used, full))
-                        off += used
-                        continue
+        val probeInf = Inflater(true)
+        val headBuf = ByteArray(4096)
+        try {
+            var off = 0
+            val n = data.size - 16
+            while (off < n) {
+                val b = data[off].toInt() and 7
+                if (b == 4 || b == 5) {
+                    val hLen = probeHeader(probeInf, data, off, headBuf)
+                    if (hLen >= 4 &&
+                        headBuf[0] == 0x7f.toByte() &&
+                        headBuf[1] == 'E'.code.toByte() &&
+                        headBuf[2] == 'L'.code.toByte() &&
+                        headBuf[3] == 'F'.code.toByte()
+                    ) {
+                        val inflated = inflateFull(data, off)
+                        if (inflated != null) {
+                            val (full, used) = inflated
+                            out.add(Stream(off, used, full))
+                            off += used
+                            continue
+                        }
                     }
                 }
+                off++
             }
-            off++
+        } finally {
+            probeInf.end()
         }
         return out
     }
 
     // ------------------------------------------------------------------
-    // Classification (vermagic / hash / probes)
+    // Classification
     // ------------------------------------------------------------------
 
     private val MAJOR_TO_KMIS = mapOf(
@@ -159,7 +323,8 @@ object DfKsudUpdater {
         "6.1" to listOf("android14-6.1"),
         "6.6" to listOf("android15-6.6"),
         "6.12" to listOf("android16-6.12"),
-        "6.18" to listOf("android17-6.18"))
+        "6.18" to listOf("android17-6.18"),
+    )
 
     private fun vermagicOf(payload: ByteArray): String {
         val needle = "vermagic=".toByteArray()
@@ -186,28 +351,36 @@ object DfKsudUpdater {
             val tag = Regex("^android(\\d+)-").find(c)?.groupValues?.get(1) ?: continue
             if (first.contains("android$tag")) return c
         }
-        return "" // 5.10/5.15 without tag -> hash resolution (reference)
+        return ""
     }
 
-    private fun classify(streams: MutableList<Stream>, refHashes: Map<String, String>) {
+    private fun classifyInitial(streams: MutableList<Stream>) {
+        val susfsNeedle = "susfs".toByteArray()
+        val busyboxNeedle = "BusyBox".toByteArray()
+        val ksuinit1 = "Replaced module vermagic".toByteArray()
+        val ksuinit2 = "Hello, KernelSU".toByteArray()
+        val bootctlNeedle = "bootctl".toByteArray()
+
         for (s in streams) {
             s.vermagic = vermagicOf(s.payload)
             s.sha = sha256Hex(s.payload)
             if (s.vermagic.isNotEmpty()) {
-                if (containsBytes(s.payload, "susfs".toByteArray())) {
+                if (containsBytes(s.payload, susfsNeedle)) {
                     s.kind = "susfs_ko"
                     continue
                 }
                 s.kind = "ko"
                 val k = kmiFromVermagic(s.vermagic)
-                if (k.isNotEmpty()) { s.kmi = k; s.how = "vermagic" }
-                else refHashes[s.sha]?.let { s.kmi = it; s.how = "reference" }
+                if (k.isNotEmpty()) {
+                    s.kmi = k
+                    s.how = "vermagic"
+                }
             } else {
                 s.kind = when {
-                    containsBytes(s.payload, "BusyBox".toByteArray()) -> "busybox"
-                    containsBytes(s.payload, "Replaced module vermagic".toByteArray()) -> "ksuinit"
-                    containsBytes(s.payload, "Hello, KernelSU".toByteArray()) -> "ksuinit"
-                    containsBytes(s.payload, "bootctl".toByteArray()) -> "bootctl"
+                    containsBytes(s.payload, busyboxNeedle) -> "busybox"
+                    containsBytes(s.payload, ksuinit1) -> "ksuinit"
+                    containsBytes(s.payload, ksuinit2) -> "ksuinit"
+                    containsBytes(s.payload, bootctlNeedle) -> "bootctl"
                     else -> "unknown"
                 }
             }
@@ -221,228 +394,267 @@ object DfKsudUpdater {
     // Downloads
     // ------------------------------------------------------------------
 
-    private fun httpGet(url: String): ByteArray {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.connectTimeout = 15_000
-        conn.readTimeout = 30_000
-        conn.instanceFollowRedirects = true
-        conn.setRequestProperty("User-Agent", "UniRoot-NotStable")
-        conn.connect()
-        if (conn.responseCode !in 200..299) throw IllegalStateException("HTTP ${conn.responseCode} $url")
-        return conn.inputStream.use { it.readBytes() }
+    private fun httpGet(url: String, isGithubApi: Boolean = false): ByteArray {
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15_000
+            readTimeout = 45_000
+            instanceFollowRedirects = true
+            setRequestProperty("User-Agent", "UniRoot-Next/${BuildConfig.VERSION_NAME}")
+            if (isGithubApi) setRequestProperty("Accept", "application/vnd.github+json")
+        }
+        return try {
+            conn.connect()
+            val code = conn.responseCode
+            if (code == 403 && conn.getHeaderField("X-RateLimit-Remaining") == "0") {
+                throw IllegalStateException("GitHub API rate limit reached (HTTP 403). Try again later.")
+            }
+            if (code !in 200..299) {
+                throw IllegalStateException("HTTP $code for $url")
+            }
+            conn.inputStream.use { it.readBytes() }
+        } finally {
+            conn.disconnect()
+        }
     }
 
-    /** Latest release: (tag, repo, raw json) for the selected flavor. */
-    private fun fetchLatest(classic: Boolean): Triple<String, String, String> {
-        val repos = if (classic) REPOS_CLASSIC else REPOS_NEXT
-        for (repo in repos) {
-            runCatching {
-                val json = String(httpGet("https://api.github.com/repos/$repo/releases/latest"))
-                val tag = Regex("\"tag_name\"\\s*:\\s*\"([^\"]+)\"").find(json)?.groupValues?.get(1)
-                if (!tag.isNullOrBlank()) return Triple(tag, repo, json)
+    private fun extractApkCode(releaseJson: String): String? =
+        Regex("""KernelSU(?:_Next)?_v[\d.]+_(\d+)-release\.apk""").find(releaseJson)?.groupValues?.get(1)
+
+    private fun parseReleaseMeta(jsonText: String, repo: String): ReleaseMeta? = runCatching {
+        val obj = JSONObject(jsonText)
+        val tag = obj.optString("tag_name", "").trim()
+        if (tag.isEmpty()) return null
+        val version = tag.removePrefix("v").removePrefix("V")
+        val code = extractApkCode(jsonText)
+        val niceName = if (code != null) "$version-$code" else "$version-samsung"
+        var ksudUrl: String? = null
+        val assets = obj.optJSONArray("assets")
+        if (assets != null) {
+            for (i in 0 until assets.length()) {
+                val a = assets.getJSONObject(i)
+                val name = a.optString("name", "")
+                if (name == "ksud-aarch64-linux-android") {
+                    ksudUrl = a.optString("browser_download_url", "").takeIf { it.isNotBlank() }
+                    break
+                }
             }
         }
-        throw IllegalStateException("GitHub API unreachable")
-    }
+        val finalUrl = ksudUrl ?: "https://github.com/$repo/releases/download/$tag/ksud-aarch64-linux-android"
+        ReleaseMeta(tag = tag, repo = repo, json = jsonText, niceName = niceName, ksudDownloadUrl = finalUrl)
+    }.getOrNull()
 
-    private fun downloadKsud(tag: String, repo: String, progress: (Int, String) -> Unit): ByteArray {
-        progress(20, "Downloading the official ksud…")
-        say("[*] Downloading the official ksud…")
-        val ksud = httpGet("https://github.com/$repo/releases/download/$tag/ksud-aarch64-linux-android")
-        say("    ${ksud.size} bytes")
-        return ksud
+    private fun fetchLatest(classic: Boolean): ReleaseMeta {
+        val repos = if (classic) REPOS_CLASSIC else REPOS_NEXT
+        var lastError = "GitHub API unreachable"
+        for (repo in repos) {
+            try {
+                val json = String(httpGet("https://api.github.com/repos/$repo/releases/latest", isGithubApi = true))
+                parseReleaseMeta(json, repo)?.let { return it }
+            } catch (e: Exception) {
+                lastError = e.message ?: e.javaClass.simpleName
+            }
+        }
+        throw IllegalStateException(lastError)
     }
 
     // ------------------------------------------------------------------
     // Main entry
     // ------------------------------------------------------------------
 
-    /**
-     * Downloads + patches + registers the result. Returns the final message.
-     * [onLog] receives every step; [onProgress] drives the progress popup.
-     */
     fun run(
         context: Context,
         classic: Boolean = false,
+        forceRepatch: Boolean = false,
         onLog: (String) -> Unit,
         onProgress: (Int, String) -> Unit = { _, _ -> },
     ): String {
-        log = onLog
-        val progress: (Int, String) -> Unit = { pct, stage -> onProgress(pct, stage) }
-        val flavorName = if (classic) "KernelSU classic" else "KernelSU Next"
-        progress(5, "Looking for the latest release…")
-        say("[*] Looking for the latest $flavorName release…")
-        val (tag, repo, releaseJson) = fetchLatest(classic)
-        say("[*] Latest release: $tag ($repo)")
-
-        val version = tag.removePrefix("v")
-        // The release's manager APK name carries the VERSION CODE
-        // (KernelSU_Next_v3.4.0_33294-release.apk) -> id = "3.4.0-33294".
-        val code = Regex("""KernelSU(?:_Next)?_v[\d.]+_(\d+)-release\.apk""").find(releaseJson)
-            ?.groupValues?.get(1)
-        val niceName = if (code != null) "$version-$code" else "$version-samsung"
-
-        if (classic) {
-            val tagFile = File(context.filesDir, "ksud-classic-latest.tag")
-            val binFile = File(context.filesDir, "ksud-classic-latest")
-            if (binFile.isFile && tagFile.isFile && tagFile.readText().trim() == tag) {
-                KsudClassicProfiles.selectLatest(context, niceName,
-                    "official ksud $tag + Samsung KDP+DEFEX kos - patched on device")
-                say("[✓] You are already updated ($niceName)")
-                progress(100, "You are already updated ($niceName)")
-                return "You are already updated ($niceName)"
-            }
-        } else if (alreadyUpdatedNext(context, niceName)) {
-            KsudNextProfiles.setSelected(context, niceName)
-            say("[✓] You are already updated ($niceName)")
-            progress(100, "You are already updated ($niceName)")
-            return "You are already updated ($niceName)"
+        fun say(msg: String) {
+            onLog(msg)
+            android.util.Log.i("DfKsudUpd", msg)
         }
 
-        val ksud = downloadKsud(tag, repo, progress)
-        val patched = patchKsud(context, ksud, tag, classic, progress)
+        val flavorName = if (classic) "KernelSU Classic" else "KernelSU Next"
+        onProgress(5, "Querying latest $flavorName release…")
+        say("[*] Querying latest $flavorName release…")
+        val meta = fetchLatest(classic)
+        say("[*] Latest upstream release: ${meta.tag} (${meta.repo})")
+
+        val localBest = localBestVersion(context, classic)
+        if (!forceRepatch && !isRemoteNewer(meta.tag, localBest)) {
+            if (classic) {
+                val targetId = KsudClassicProfiles.list(context).firstOrNull()?.id ?: "bundled-universal"
+                KsudClassicProfiles.setSelected(context, targetId)
+            } else {
+                val bestProfile = KsudNextProfiles.list(context).firstOrNull()
+                if (bestProfile != null) KsudNextProfiles.setSelected(context, bestProfile.id)
+            }
+            val msg = "Already up to date (v$localBest)"
+            say("[✓] $msg (upstream ${meta.tag})")
+            onProgress(100, msg)
+            return msg
+        }
+
+        onProgress(20, "Downloading official ksud ${meta.tag}…")
+        say("[*] Downloading official ksud from ${meta.ksudDownloadUrl}…")
+        val ksud = httpGet(meta.ksudDownloadUrl)
+        say("    Downloaded ${ksud.size} bytes")
+
+        val patched = patchKsud(context, ksud, meta, classic, ::say, onProgress)
 
         return if (classic) {
-            // CLASSIC: the engine stages the SELECTED classic profile
-            // (ksud-classic-latest, see KsudClassicProfiles); the tag marker
-            // drives "you are already updated". Profile name = version-code.
             File(context.filesDir, "ksud-classic-latest").writeBytes(patched)
-            File(context.filesDir, "ksud-classic-latest.tag").writeText(tag)
-            KsudClassicProfiles.selectLatest(context, niceName,
-                "official ksud $tag + Samsung KDP+DEFEX kos - patched on device")
-            say("[+] Classic profile '$niceName' saved and SELECTED (ksud-classic-latest)")
-            progress(100, "Done: $tag patched -> classic profile '$niceName'")
-            "OK: $tag patched -> classic profile '$niceName'"
+            File(context.filesDir, "ksud-classic-latest.tag").writeText(meta.tag)
+            KsudClassicProfiles.selectLatest(
+                context,
+                meta.niceName,
+                "Official ksud ${meta.tag} + Samsung KDP+DEFEX modules (patched on-device)",
+            )
+            say("[+] Classic profile '${meta.niceName}' saved and selected")
+            onProgress(100, "Patched & selected · ${meta.niceName}")
+            "Patched ${meta.tag} -> ${meta.niceName}"
         } else {
-            val profileId = niceName
-            KsudNextProfiles.addDynamic(context, profileId, patched,
-                "official ksud $tag + Samsung KDP+DEFEX kos - patched on device")
-            say("[+] Profile '$profileId' created and SELECTED")
-            progress(100, "Done")
-            "OK: $tag patched -> profile '$profileId'"
+            KsudNextProfiles.addDynamic(
+                context,
+                meta.niceName,
+                patched,
+                "Official ksud ${meta.tag} + Samsung KDP+DEFEX modules (patched on-device)",
+            )
+            say("[+] Next profile '${meta.niceName}' created and selected")
+            onProgress(100, "Patched & selected · ${meta.niceName}")
+            "Patched ${meta.tag} -> ${meta.niceName}"
         }
     }
 
-    private fun alreadyUpdatedNext(context: Context, profileId: String): Boolean =
-        KsudNextProfiles.list(context).any { it.id == profileId }
-
     // ------------------------------------------------------------------
-    // The COMMON patch pipeline (scan -> inject -> verify)
+    // Common patch pipeline (scan -> targeted reference fetch -> inject -> verify)
     // ------------------------------------------------------------------
 
     private fun patchKsud(
-        context: Context, ksud: ByteArray, tag: String, classic: Boolean,
+        context: Context,
+        ksud: ByteArray,
+        meta: ReleaseMeta,
+        classic: Boolean,
+        say: (String) -> Unit,
         progress: (Int, String) -> Unit,
     ): ByteArray {
-        val repo = if (classic) REPOS_CLASSIC[0] else REPOS_NEXT[0]
-        val refBase = "https://github.com/$repo/releases/download/$tag"
-
-        // References: the official kos OF THIS RELEASE (hash resolution of
-        // the ambiguous 5.10/5.15 slots). Best-effort: an unresolved slot is
-        // skipped (ksud loads the ko of its OWN kmi anyway).
-        progress(40, "Downloading reference kos…")
-        say("[*] Downloading official kos of $tag (reference)…")
-        val refHashes = HashMap<String, String>()
-        for (kmi in KMIS) {
-            val bytes = if (classic) {
-                runCatching { httpGet("$refBase/lkm-aarch64-${kmi}_kernelsu.ko") }
-                    .recoverCatching { httpGet("$refBase/aarch64-${kmi}_kernelsu.ko") }
-                    .recoverCatching { httpGet("$refBase/${kmi}_kernelsu.ko") }
-                    .getOrNull()
-            } else {
-                runCatching { httpGet("$refBase/aarch64_${kmi}_kernelsu.ko") }
-                    .recoverCatching { httpGet("$refBase/aarch64-${kmi}_kernelsu.ko") }
-                    .recoverCatching { httpGet("$refBase/${kmi}_kernelsu.ko") }
-                    .getOrNull()
-            }
-            if (bytes != null) refHashes[sha256Hex(bytes)] = kmi
-        }
-        say("    ${refHashes.size}/8 references loaded")
-
-        // The Samsung KDP+DEFEX kos bundled in the APK - matched by the KMI
-        // IN THE FILE NAME (android16-6.12_kernelsu-XXX.ko accepted), like
-        // patch-ksud-next.py does.
         val koDir = if (classic) KO_ASSET_DIR_CLASSIC else KO_ASSET_DIR
         val koAssets = runCatching { context.assets.list(koDir)?.toList() ?: emptyList() }
             .getOrDefault(emptyList())
         val replacements = HashMap<String, ByteArray>()
         for (kmi in KMIS) {
             val name = koAssets.firstOrNull { it.startsWith("${kmi}_kernelsu") && it.endsWith(".ko") }
-                ?: throw IllegalStateException("Samsung ko missing from the APK: $kmi")
+                ?: throw IllegalStateException("Samsung module missing from APK: $kmi")
             replacements[kmi] = context.assets.open("$koDir/$name").use { it.readBytes() }
         }
 
-        progress(55, "Scanning embedded assets…")
-        say("[*] Patching (deflate scan + in-place injection)…")
+        progress(35, "Scanning embedded ELF/DEFLATE assets…")
+        say("[*] Scanning raw DEFLATE streams in ksud…")
         val data = ksud.copyOf()
         val streams = scanStreams(data).toMutableList()
-        classify(streams, refHashes)
-        say("    ${streams.size} embedded assets found")
+        classifyInitial(streams)
+        say("    Found ${streams.size} embedded ELF assets")
 
-        val slots = HashMap<String, Stream>()
-        for (s in streams) if (s.kind == "ko" && s.kmi.isNotEmpty()) {
-            check(s.kmi !in slots) { "two slots ${s.kmi}" }
-            slots[s.kmi] = s
+        // Only fetch official reference .ko files for ambiguous KMIs not resolved by vermagic
+        // (saves up to 5 HTTP requests and ~2.5 MB on every run).
+        val resolvedByVermagic = streams.filter { it.kind == "ko" && it.kmi.isNotEmpty() }.map { it.kmi }.toSet()
+        val unresolvedSlots = streams.filter { it.kind == "ko" && it.kmi.isEmpty() }
+        val neededKmis = KMIS.filter { it !in resolvedByVermagic }
+
+        if (unresolvedSlots.isNotEmpty() && neededKmis.isNotEmpty()) {
+            progress(45, "Fetching ${neededKmis.size} reference .ko hashes…")
+            say("[*] Downloading ${neededKmis.size} reference modules from ${meta.repo} ${meta.tag}…")
+            val refBase = "https://github.com/${meta.repo}/releases/download/${meta.tag}"
+            val refHashes = HashMap<String, String>()
+            for (kmi in neededKmis) {
+                val urls = if (classic) {
+                    listOf(
+                        "$refBase/lkm-aarch64-${kmi}_kernelsu.ko",
+                        "$refBase/aarch64-${kmi}_kernelsu.ko",
+                        "$refBase/${kmi}_kernelsu.ko",
+                    )
+                } else {
+                    listOf(
+                        "$refBase/aarch64_${kmi}_kernelsu.ko",
+                        "$refBase/aarch64-${kmi}_kernelsu.ko",
+                        "$refBase/${kmi}_kernelsu.ko",
+                    )
+                }
+                var bytes: ByteArray? = null
+                for (u in urls) {
+                    bytes = runCatching { httpGet(u) }.getOrNull()
+                    if (bytes != null) break
+                }
+                if (bytes != null) refHashes[sha256Hex(bytes)] = kmi
+            }
+            for (s in unresolvedSlots) {
+                refHashes[s.sha]?.let { s.kmi = it; s.how = "reference" }
+            }
+            say("    Matched ${refHashes.size}/${neededKmis.size} ambiguous references")
         }
 
+        val slots = HashMap<String, Stream>()
+        for (s in streams) {
+            if (s.kind == "ko" && s.kmi.isNotEmpty()) {
+                check(s.kmi !in slots) { "Duplicate KMI slot ${s.kmi}" }
+                slots[s.kmi] = s
+            }
+        }
+
+        progress(60, "Compressing Samsung KDP+DEFEX modules…")
         class Plan(val kmi: String, val slot: Stream, val comp: ByteArray, val raw: ByteArray)
         val plan = ArrayList<Plan>()
-        val skipped = ArrayList<String>()
         for (kmi in replacements.keys.sorted()) {
             val raw = replacements[kmi]!!
             check(raw.size >= 4 && raw[0] == 0x7f.toByte()) { "$kmi is not an ELF" }
             val slot = slots[kmi]
             if (slot == null) {
-                skipped.add(kmi)
-                say("[!] slot $kmi not found/ambiguous - skipped (harmless: ksud loads the ko of its own kmi)")
+                say("[!] Slot $kmi not found/ambiguous — skipped")
                 continue
             }
             val comp = compressBest(raw, slot.consumed)
-                ?: throw IllegalStateException("$kmi does not compress below ${slot.consumed} bytes")
+                ?: throw IllegalStateException("$kmi compressed payload exceeds slot budget (${slot.consumed} bytes)")
             plan.add(Plan(kmi, slot, comp, raw))
         }
-        check(plan.isNotEmpty()) { "no patchable slot in this ksud" }
+        check(plan.isNotEmpty()) { "No patchable KMI slot found in this ksud binary" }
 
-        progress(75, "Injecting Samsung kos…")
+        progress(75, "Injecting ${plan.size} Samsung modules…")
         for (p in plan) {
             val pad = p.slot.consumed - p.comp.size
             p.comp.copyInto(data, p.slot.start)
             java.util.Arrays.fill(data, p.slot.start + p.comp.size, p.slot.start + p.slot.consumed, 0)
-            say("[+] ${p.kmi} @0x${Integer.toHexString(p.slot.start)}: ${p.slot.consumed} -> ${p.comp.size} bytes + $pad pad")
+            say("[+] ${p.kmi} @0x${Integer.toHexString(p.slot.start)}: ${p.slot.consumed} -> ${p.comp.size} B (+$pad pad)")
         }
 
-        // VERIFY: re-scan of the output, exactly what ksud does at runtime.
-        progress(90, "Verifying…")
-        say("[*] Verifying (re-scanning the output)…")
+        progress(90, "Verifying binary integrity…")
+        say("[*] Verifying output streams…")
         val outStreams = scanStreams(data)
         val byStart = outStreams.associateBy { it.start }
         var ok = outStreams.size == streams.size
         for (p in plan) {
             val got = byStart[p.slot.start]
-            if (got == null || !got.payload.contentEquals(p.raw)) { ok = false; say("[!] ${p.kmi}: content mismatch") }
+            if (got == null || !got.payload.contentEquals(p.raw)) {
+                ok = false
+                say("[!] ${p.kmi}: content verification mismatch")
+            }
         }
         val patchedStarts = plan.map { it.slot.start }.toSet()
         for (a in streams) {
             if (a.start in patchedStarts) continue
             val got = byStart[a.start]
-            if (got == null || !got.payload.contentEquals(a.payload)) { ok = false; say("[!] untouched asset modified @0x${Integer.toHexString(a.start)}") }
+            if (got == null || !got.payload.contentEquals(a.payload)) {
+                ok = false
+                say("[!] Untouched asset modified @0x${Integer.toHexString(a.start)}")
+            }
         }
-        check(ok) { "verification failed - binary not reliable" }
+        check(ok) { "Verification failed — patched binary rejected" }
         if (!classic) {
-            patchNextLateLoadSoftReboot(data)
+            patchNextLateLoadSoftReboot(data, say)
         }
-        say("[OK] ${plan.size} injected, ${streams.size - plan.size} preserved")
+        say("[OK] ${plan.size} modules injected, ${streams.size - plan.size} assets preserved")
         return data
     }
 
-    /**
-     * Patches the late-load -> emulated_soft_reboot transition in official
-     * KernelSU-Next 3.4.0 / 3.4.2 ksud binaries so that DirtyFrag late-load
-     * switches to PID 1's mount namespace and runs full soft-reboot
-     * (stop -> on_post_fs_data -> start -> on_services -> on_boot_completed)
-     * for Zygisk (Vector), LSPosed and global module mounts.
-     */
-    private fun patchNextLateLoadSoftReboot(data: ByteArray) {
+    private fun patchNextLateLoadSoftReboot(data: ByteArray, say: (String) -> Unit) {
         fun readLe32(off: Int): Int =
             (data[off].toInt() and 0xff) or
                 ((data[off + 1].toInt() and 0xff) shl 8) or
@@ -456,16 +668,18 @@ object DfKsudUpdater {
             data[off + 3] = ((v ushr 24) and 0xff).toByte()
         }
 
-        // ksud Next 3.4.2 @ file 0x521238 (vaddr 0x522238): bl #0x5180c8 -> b #0x51fce8
+        // ksud Next 3.4.2 @ file 0x521238: bl #0x5180c8 -> b #0x51fce8
         if (data.size > 0x52123c && readLe32(0x521238) == 0x97ffd7a4.toInt()) {
             writeLe32(0x521238, 0x17fff6ac)
             say("[+] Patched Next 3.4.2 late-load -> emulated_soft_reboot @0x521238")
             return
         }
-        // ksud Next 3.4.0 @ file 0x3af7c8 (vaddr 0x3b07c8): bl #0x3a6928 -> b #0x3ae3b4
+        // ksud Next 3.4.0 @ file 0x3af7c8: bl #0x3a6928 -> b #0x3ae3b4
         if (data.size > 0x3af7cc && readLe32(0x3af7c8) == 0x97ffd858.toInt()) {
             writeLe32(0x3af7c8, 0x17fff6fb)
             say("[+] Patched Next 3.4.0 late-load -> emulated_soft_reboot @0x3af7c8")
+            return
         }
+        say("[!] Warning: soft-reboot patch offset not matched for this ksud build; bundled 3.4.2-kdp-samsung is recommended if Zygisk/LSPosed does not auto-start.")
     }
 }

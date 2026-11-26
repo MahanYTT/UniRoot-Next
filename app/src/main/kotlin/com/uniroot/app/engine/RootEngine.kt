@@ -75,9 +75,9 @@ class RootEngine(private val context: Context) {
 
     fun setAutoRootBootCount(count: Int) = prefs.edit().putInt("auto_root_boot_count", count).apply()
 
-    /** Home-page switch: "kernelsu" (default) or "kernelsu_next". */
+    /** Home-page switch: "kernelsu_next" (default) or "kernelsu". */
     var ksuFlavor: String
-        get() = prefs.getString("ksu_flavor", "kernelsu") ?: "kernelsu"
+        get() = prefs.getString("ksu_flavor", "kernelsu_next") ?: "kernelsu_next"
         set(value) = prefs.edit().putString("ksu_flavor", value).apply()
 
     /**
@@ -172,7 +172,6 @@ class RootEngine(private val context: Context) {
         refreshBundledBinaries()
         loadProfiles()
         ensureDefaultProfiles()
-        restoreRootedState()
         recoverInterruptedRuns()
         lastCrash()?.let { appendLog("[!] Previous run CRASHED (app):"); it.lineSequence().take(12).forEach { appendLog("    $it") } }
     }
@@ -317,6 +316,10 @@ class RootEngine(private val context: Context) {
         _rooted.value = rootAlive()
     }
 
+    fun setRootedLive(isRooted: Boolean) {
+        _rooted.value = isRooted
+    }
+
     /**
      * The ONLY state that counts as rooted for the UI: a WORKING su (uid=0).
      * The kernel module alone can be a half-dead boot leftover (module loaded,
@@ -330,11 +333,12 @@ class RootEngine(private val context: Context) {
         p.inputStream.bufferedReader().use { it.readText() }.contains("uid=0")
     }.getOrDefault(false)
 
-    fun markRooted(profileName: String) {
+    fun markRooted(profileName: String, flavorOverride: String? = null) {
         val set = prefs.getStringSet("rooted_profiles", emptySet()).orEmpty().toMutableSet()
         set.add(profileName)
         prefs.edit().putStringSet("rooted_profiles", set).apply()
-        profileByName(profileName)?.let { prefs.edit().putString("loaded_flavor", it.flavor).apply() }
+        val resolvedFlavor = flavorOverride ?: profileByName(profileName)?.flavor ?: ksuFlavor
+        prefs.edit().putString("loaded_flavor", resolvedFlavor).apply()
         _rooted.value = true
     }
 
@@ -610,25 +614,23 @@ class RootEngine(private val context: Context) {
     // ---------------------------------------------------------------------
 
     fun detectDevice(): DeviceInfo {
-        val model = Build.MODEL ?: ""
+        val model = (Build.MODEL ?: "").trim()
         val incremental = Build.VERSION.INCREMENTAL ?: ""
-        val kernel = runCatching { File("/proc/version").readText() }.getOrDefault("")
-            .substringAfter("Linux version ", "").substringBefore(" (").trim()
+        val kernel = DeviceInfoPanel.kernelRelease()
+        val isS25Family = model.startsWith("SM-S931", true) ||
+            model.startsWith("SM-S936", true) ||
+            model.startsWith("SM-S937", true) ||
+            model.startsWith("SM-S938", true)
         val matched: String? = when {
-            (model.startsWith("SM-F971") || model.startsWith("SM-F976")) && kernel.contains("6.12.58") -> "F976X 6.12.58"
-            model.startsWith("SM-S948") && kernel.contains("6.12.69") -> "S26 Ultra 6.12.69 ZZHK"
-            model.startsWith("SM-S931") && kernel.contains("6.6.127") && incremental.contains("ZZI4") -> "S25 6.6.127 ZZI4"
-            model.startsWith("SM-S931") && kernel.contains("6.6.127") && incremental.contains("ZZHL") -> "S25 6.6.127 ZZHL"
-            model.startsWith("SM-S91") -> "S23 (Samsung)"
+            (model.startsWith("SM-F971", true) || model.startsWith("SM-F976", true)) && kernel.contains("6.12.58") -> "F976X 6.12.58"
+            model.startsWith("SM-S948", true) && kernel.contains("6.12.69") -> "S26 Ultra 6.12.69 ZZHK"
+            isS25Family && kernel.contains("6.6.127") && incremental.contains("ZZI4", true) -> "S25 6.6.127 ZZI4"
+            isS25Family && kernel.contains("6.6.127") && incremental.contains("ZZHL", true) -> "S25 6.6.127 ZZHL"
+            isS25Family && kernel.startsWith("6.6.") -> "S93XX (Samsung S25)"
             else -> null
         }
-        val soc = when {
-            model.startsWith("SM-S948") -> "Snapdragon 8 Elite Gen 5"
-            model.startsWith("SM-S93") -> "Snapdragon 8 Elite"
-            model.startsWith("SM-S91") -> "Snapdragon 8 Gen 2"
-            else -> "-"
-        }
-        return DeviceInfo(model, kernel.ifEmpty { incremental }, soc, matched)
+        val soc = DeviceInfoPanel.resolveSocName()
+        return DeviceInfo(model, kernel, soc, matched)
     }
 
     fun shizukuBinderActive(): Boolean = runCatching { Shizuku.pingBinder() }.getOrDefault(false)

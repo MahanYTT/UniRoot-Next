@@ -168,6 +168,10 @@ object KsudNextProfiles {
         return f.delete()
     }
 
+    /** Highest semantic version available across both bundled and dynamic Next profiles. */
+    fun highestVersion(context: Context): String =
+        list(context).firstOrNull()?.version ?: "3.4.2"
+
     /** "3.10.0" > "3.9.0" : comparaison numérique champ par champ. */
     private fun versionRank(version: String): List<Int> =
         version.split('.').map { it.toIntOrNull() ?: 0 }

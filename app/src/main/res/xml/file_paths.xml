@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <files-path name="manager" path="manager/" />
+    <files-path name="updates" path="updates/" />
     <files-path name="root" path="." />
+    <cache-path name="cache_updates" path="updates/" />
     <external-files-path name="df" path="." />
 </paths>

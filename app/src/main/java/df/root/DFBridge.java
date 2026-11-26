@@ -25,15 +25,16 @@ import java.security.SecureRandom;
  */
 public final class DFBridge {
 
-    private static boolean loaded = false;
+    private static String loadedLib = null;
 
     private DFBridge() {}
 
     /** Loads the flavor-matching native engine (same JNI symbol in both). */
     public static synchronized void load(boolean next) {
-        if (loaded) return;
-        System.loadLibrary(next ? "expnext" : "exp");
-        loaded = true;
+        String want = next ? "expnext" : "exp";
+        if (want.equals(loadedLib)) return;
+        System.loadLibrary(want);
+        loadedLib = want;
     }
 
     public static native int nativeRunAll(IReporter reporter, int encapPort, int spi,

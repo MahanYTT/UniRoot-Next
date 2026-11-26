@@ -125,11 +125,8 @@ class GitHubSupport(private val context: Context) {
     }
 
     /** "6.6.127-android15-8-…" → "android15-6.6" (the GKI KMI used in asset names). */
-    fun kmiFromKernel(kernel: String): String {
-        val m = Regex("android(\\d+)-(\\d+)\\.(\\d+)").find(kernel)
-            ?: return ""
-        return "android${m.groupValues[1]}-${m.groupValues[2]}.${m.groupValues[3]}"
-    }
+    fun kmiFromKernel(kernel: String): String =
+        DeviceInfoPanel.parseKmi(kernel) ?: ""
 
     /**
      * Downloads the official KernelSU manager APK from the latest GitHub
@@ -177,7 +174,7 @@ class GitHubSupport(private val context: Context) {
                     val n = input.read(buffer)
                     if (n < 0) break
                     total += n
-                    if (expectedSize in 1..total) { conn.disconnect(); require(false) { "Artifact larger than expected" } }
+                    if (expectedSize > 0 && total > expectedSize) { conn.disconnect(); require(false) { "Artifact larger than expected" } }
                     output.write(buffer, 0, n)
                 }
                 output.fd.sync()
