@@ -2,7 +2,7 @@
 
 # UniRoot Next — One-Tap Root for Samsung Galaxy (KernelSU-Next & KernelSU)
 
-**Unprivileged One-Tap Android Root for Samsung Galaxy S25 / S25+ / S25 Ultra, S26 Ultra, Z Fold 8 & GKI 2.0 Devices — with Full KernelSU-Next v3.4.2, Zygisk (Vector / Zygisk Next / ReZygisk), LSPosed & Auto-Root on Boot Support**
+**Unprivileged (DirtyFrag) One-Tap Android Root for Samsung Galaxy S25 / S25+ / S25 Ultra, S26 Ultra, Z Fold 8 & GKI 2.0 Devices — with Full KernelSU-Next v3.4.2 & Auto-Root on Boot Support**
 
 [![Latest Release](https://img.shields.io/github/v/release/MahanYTT/UniRoot-Next?style=for-the-badge&logo=github&label=Latest%20Release&color=2563eb)](https://github.com/MahanYTT/UniRoot-Next/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/MahanYTT/UniRoot-Next/total?style=for-the-badge&logo=android&label=Downloads&color=16a34a)](https://github.com/MahanYTT/UniRoot-Next/releases/latest)
